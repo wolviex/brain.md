@@ -7,8 +7,13 @@ import { BrainTreeProvider } from "./view/brainTree";
 import { applyReadonlyGuard } from "./guard/readonly";
 import { HandEditWatcher } from "./guard/handEditWatcher";
 import { LintDiagnostics } from "./guard/lintDiagnostics";
+import { GitWatcher } from "./capture/gitWatcher";
+import { shouldCapture, type CapturedCommit } from "./capture/filter";
+import { emptyQueueState, enqueueCommits, type QueueState } from "./capture/queue";
 
 const SETUP_PROMPTED_KEY = "brainMd.setupPrompted";
+const QUEUE_STATE_KEY = "brainMd.captureQueue";
+const LAST_SEEN_KEY = "brainMd.captureLastSeen";
 const PAGE_CATEGORIES = ["project", "concept", "decision", "person", "reference"] as const;
 
 let output: vscode.OutputChannel | undefined;
@@ -16,6 +21,7 @@ let statusBar: BrainStatusBar | undefined;
 let tree: BrainTreeProvider | undefined;
 let handEditWatcher: HandEditWatcher | undefined;
 let lintDiagnostics: LintDiagnostics | undefined;
+let gitWatcher: GitWatcher | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("brain.md");
@@ -42,6 +48,18 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("brainMd.newPage", () => newPage(context)),
   );
 
+  if (vscode.workspace.getConfiguration("brainMd").get<boolean>("capture.enabled", true)) {
+    const lastSeen = context.workspaceState.get<Record<string, string>>(LAST_SEEN_KEY) ?? {};
+    gitWatcher = new GitWatcher(
+      output,
+      lastSeen,
+      (repoRoot, commits) => void handleNewCommits(context, repoRoot, commits),
+      (repoRoot, sha) => void persistLastSeen(context, repoRoot, sha),
+    );
+    context.subscriptions.push(gitWatcher);
+    void gitWatcher.start();
+  }
+
   void refreshStatus(context).then(() => maybePromptSetup(context));
 }
 
@@ -52,6 +70,50 @@ function resolveCliPathForFolder(context: vscode.ExtensionContext, folder: vscod
     workspaceRoot: folder.uri.fsPath,
     extensionAssetsDir: context.asAbsolutePath("assets"),
   });
+}
+
+function loadQueueState(context: vscode.ExtensionContext): QueueState {
+  return context.workspaceState.get<QueueState>(QUEUE_STATE_KEY) ?? emptyQueueState();
+}
+
+async function persistLastSeen(context: vscode.ExtensionContext, repoRoot: string, sha: string): Promise<void> {
+  const current = context.workspaceState.get<Record<string, string>>(LAST_SEEN_KEY) ?? {};
+  await context.workspaceState.update(LAST_SEEN_KEY, { ...current, [repoRoot]: sha });
+}
+
+/**
+ * A new batch of commits from the git watcher. Detection only — this never
+ * writes to the brain itself. Commits that pass the feedback-loop filter
+ * are queued; a human (or agent, in review) decides what's actually durable.
+ */
+async function handleNewCommits(context: vscode.ExtensionContext, repoRoot: string, commits: CapturedCommit[]): Promise<void> {
+  const folder =
+    vscode.workspace.workspaceFolders?.find((f) => f.uri.fsPath === repoRoot) ?? vscode.workspace.workspaceFolders?.[0];
+  if (!folder) return;
+
+  const cliPath = resolveCliPathForFolder(context, folder);
+  let brainDir: string;
+  try {
+    brainDir = (await getBrainDir(cliPath, folder.uri.fsPath)).dir;
+  } catch {
+    return;
+  }
+
+  const config = vscode.workspace.getConfiguration("brainMd", folder);
+  const capturable = commits.filter((commit) =>
+    shouldCapture(commit, {
+      workspaceRoot: folder.uri.fsPath,
+      brainDir,
+      includeMerges: config.get<boolean>("capture.includeMerges", false),
+      ignoreGlobs: config.get<string[]>("capture.ignoreGlobs", []),
+    }),
+  );
+  if (capturable.length === 0) return;
+
+  const next = enqueueCommits(loadQueueState(context), capturable);
+  await context.workspaceState.update(QUEUE_STATE_KEY, next);
+  output?.appendLine(`brain capture: queued ${capturable.length} commit(s), ${next.pending.length} pending`);
+  await refreshStatus(context);
 }
 
 async function refreshStatus(context: vscode.ExtensionContext): Promise<void> {
@@ -75,7 +137,7 @@ async function refreshStatus(context: vscode.ExtensionContext): Promise<void> {
     return;
   }
 
-  statusBar?.showBrainDir(info);
+  statusBar?.showBrainDir(info, loadQueueState(context).pending.length);
   tree?.setContext(cliPath, workspaceRoot, info);
   output?.appendLine(`brain-dir: ${JSON.stringify(info)}`);
 

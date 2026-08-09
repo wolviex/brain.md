@@ -25,6 +25,22 @@
           "type": "boolean",
           "default": true,
           "description": "Add the brain data directory to files.readonlyInclude so the editor refuses to save over a brain file directly — all writes must go through the brain CLI."
+        },
+        "brainMd.capture.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Watch git commits and queue non-brain-only ones for review. The extension never writes to the brain from a commit on its own — capture only detects; review decides."
+        },
+        "brainMd.capture.includeMerges": {
+          "type": "boolean",
+          "default": false,
+          "description": "Also queue merge commits for review. Off by default — merges rarely carry new project knowledge of their own."
+        },
+        "brainMd.capture.ignoreGlobs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Commits whose changed files ALL match one of these globs (e.g. \"dist/**\", \"*.lock\") are not queued for review."
         }
       }
     },

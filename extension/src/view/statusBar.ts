@@ -21,14 +21,21 @@ export class BrainStatusBar implements vscode.Disposable {
     this.item.show();
   }
 
-  showBrainDir(info: BrainDirInfo): void {
+  showBrainDir(info: BrainDirInfo, pendingCount = 0): void {
     if (!info.exists || !info.populated) {
       this.item.text = "$(book) Brain: not set up";
       this.item.tooltip = `brain.md: no brain found at ${info.dir} (${info.origin}).\nClick to refresh, or run "Brain: Set Up Workspace".`;
     } else {
       const redirected = info.source === "brainRoot" ? " (redirected)" : "";
-      this.item.text = `$(book) Brain${redirected}`;
-      this.item.tooltip = `brain.md: ${info.dir}\n${info.origin}`;
+      const pending = pendingCount > 0 ? ` — ${pendingCount} pending` : "";
+      this.item.text = `$(book) Brain${redirected}${pending}`;
+      this.item.tooltip = [
+        `brain.md: ${info.dir}`,
+        info.origin,
+        pendingCount > 0 ? `${pendingCount} commit(s) queued for review` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n");
     }
     this.item.show();
   }
