@@ -70,6 +70,11 @@ one it interviews you. (Setup leaves the brain empty on purpose — seeding is a
 **4. Work as usual.** The agent reads and writes the brain only through the `brain` CLI,
 following `BRAIN.md` — brain files are never hand-edited.
 
+**Using code-server?** The [`extension/`](./extension) directory packages steps 2–4 as an
+installable code-server / VS Code extension: it offers to scaffold a workspace on open, guards
+the brain dir against hand edits, watches commits, and routes anything worth capturing through a
+review step — see [`extension/README.md`](./extension/README.md).
+
 ## See it work
 
 The point of a brain is what happens *across* sessions — a decision made today is still

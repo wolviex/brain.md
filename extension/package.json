@@ -6,6 +6,15 @@
   "publisher": "mindmux",
   "license": "Apache-2.0",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wolviex/brain.md.git",
+    "directory": "extension"
+  },
+  "bugs": {
+    "url": "https://github.com/wolviex/brain.md/issues"
+  },
+  "homepage": "https://github.com/wolviex/brain.md/tree/main/extension#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -89,6 +98,10 @@
         "command": "brainMd.lintLinks",
         "title": "Brain: Lint Links",
         "icon": "$(check)"
+      },
+      {
+        "command": "brainMd.installSkills",
+        "title": "Brain: Install Agent Skills…"
       }
     ],
     "menus": {

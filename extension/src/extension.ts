@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { join } from "node:path";
 import { resolveCliPath, runBrain } from "./cli";
 import { getBrainDir, type BrainDirInfo } from "./brainDir";
 import { runSetupFlow } from "./setup";
@@ -11,6 +12,7 @@ import { GitWatcher } from "./capture/gitWatcher";
 import { shouldCapture, type CapturedCommit } from "./capture/filter";
 import { emptyQueueState, enqueueCommits, markHandled, type QueueState } from "./capture/queue";
 import { runReviewUi } from "./review/reviewUi";
+import { installAgentSkills } from "./skillsInstall";
 
 const SETUP_PROMPTED_KEY = "brainMd.setupPrompted";
 const QUEUE_STATE_KEY = "brainMd.captureQueue";
@@ -48,6 +50,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("brainMd.lintLinks", () => lintLinks(context)),
     vscode.commands.registerCommand("brainMd.newPage", () => newPage(context)),
     vscode.commands.registerCommand("brainMd.reviewPending", () => reviewPending(context)),
+    vscode.commands.registerCommand("brainMd.installSkills", () => installSkills(context)),
   );
 
   if (vscode.workspace.getConfiguration("brainMd").get<boolean>("capture.enabled", true)) {
@@ -192,6 +195,13 @@ async function reviewPending(context: vscode.ExtensionContext): Promise<void> {
     await context.workspaceState.update(QUEUE_STATE_KEY, markHandled(loadQueueState(context), handledShas));
   }
   await refreshStatus(context);
+}
+
+async function installSkills(context: vscode.ExtensionContext): Promise<void> {
+  if (!output) return;
+  const assetsSkillsDir = join(context.asAbsolutePath("assets"), "skills");
+  const version = (context.extension.packageJSON as { version?: string }).version ?? "0.0.0";
+  await installAgentSkills(assetsSkillsDir, version, output);
 }
 
 async function reindex(context: vscode.ExtensionContext): Promise<void> {
