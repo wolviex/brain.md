@@ -1,0 +1,39 @@
+import * as vscode from "vscode";
+import type { BrainDirInfo } from "../brainDir";
+
+export class BrainStatusBar implements vscode.Disposable {
+  private readonly item: vscode.StatusBarItem;
+
+  constructor() {
+    this.item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    this.item.command = "brainMd.refreshStatus";
+  }
+
+  showNoWorkspace(): void {
+    this.item.text = "$(book) Brain";
+    this.item.tooltip = "brain.md: open a folder to use the brain CLI";
+    this.item.show();
+  }
+
+  showError(message: string): void {
+    this.item.text = "$(warning) Brain";
+    this.item.tooltip = `brain.md: ${message}`;
+    this.item.show();
+  }
+
+  showBrainDir(info: BrainDirInfo): void {
+    if (!info.exists || !info.populated) {
+      this.item.text = "$(book) Brain: not set up";
+      this.item.tooltip = `brain.md: no brain found at ${info.dir} (${info.origin}).\nClick to refresh, or run "Brain: Set Up Workspace".`;
+    } else {
+      const redirected = info.source === "brainRoot" ? " (redirected)" : "";
+      this.item.text = `$(book) Brain${redirected}`;
+      this.item.tooltip = `brain.md: ${info.dir}\n${info.origin}`;
+    }
+    this.item.show();
+  }
+
+  dispose(): void {
+    this.item.dispose();
+  }
+}
