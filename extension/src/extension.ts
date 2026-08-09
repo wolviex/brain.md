@@ -9,7 +9,8 @@ import { HandEditWatcher } from "./guard/handEditWatcher";
 import { LintDiagnostics } from "./guard/lintDiagnostics";
 import { GitWatcher } from "./capture/gitWatcher";
 import { shouldCapture, type CapturedCommit } from "./capture/filter";
-import { emptyQueueState, enqueueCommits, type QueueState } from "./capture/queue";
+import { emptyQueueState, enqueueCommits, markHandled, type QueueState } from "./capture/queue";
+import { runReviewUi } from "./review/reviewUi";
 
 const SETUP_PROMPTED_KEY = "brainMd.setupPrompted";
 const QUEUE_STATE_KEY = "brainMd.captureQueue";
@@ -46,6 +47,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("brainMd.reindex", () => reindex(context)),
     vscode.commands.registerCommand("brainMd.lintLinks", () => lintLinks(context)),
     vscode.commands.registerCommand("brainMd.newPage", () => newPage(context)),
+    vscode.commands.registerCommand("brainMd.reviewPending", () => reviewPending(context)),
   );
 
   if (vscode.workspace.getConfiguration("brainMd").get<boolean>("capture.enabled", true)) {
@@ -163,6 +165,32 @@ async function setupWorkspace(context: vscode.ExtensionContext): Promise<void> {
     assetsDir: context.asAbsolutePath("assets"),
     output,
   });
+  await refreshStatus(context);
+}
+
+async function reviewPending(context: vscode.ExtensionContext): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder || !output) return;
+
+  const state = loadQueueState(context);
+  if (state.pending.length === 0) {
+    void vscode.window.showInformationMessage("brain.md: nothing pending review.");
+    return;
+  }
+
+  const handledShas = await runReviewUi(
+    {
+      cliPath: resolveCliPathForFolder(context, folder),
+      workspaceRoot: folder.uri.fsPath,
+      storageDir: (context.storageUri ?? context.globalStorageUri).fsPath,
+      output,
+    },
+    state.pending,
+  );
+
+  if (handledShas.length > 0) {
+    await context.workspaceState.update(QUEUE_STATE_KEY, markHandled(loadQueueState(context), handledShas));
+  }
   await refreshStatus(context);
 }
 

@@ -67,6 +67,10 @@
         "title": "Brain: Refresh Status"
       },
       {
+        "command": "brainMd.reviewPending",
+        "title": "Brain: Review Pending Captures"
+      },
+      {
         "command": "brainMd.setupWorkspace",
         "title": "Brain: Set Up Workspace",
         "icon": "$(gear)"
