@@ -1,0 +1,31 @@
+{
+  "name": "brain-md",
+  "displayName": "brain.md",
+  "description": "Persistent project memory for coding agents — scaffold, guard, and capture into a project brain.",
+  "version": "0.1.0",
+  "publisher": "mindmux",
+  "license": "Apache-2.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {},
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "node esbuild.mjs --production && vsce package",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/",
+    "test:cli": "node --test ../skills/brain-page/test/"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.24.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
+  }
+}
