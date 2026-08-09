@@ -27,6 +27,10 @@
       {
         "command": "brainMd.refreshStatus",
         "title": "Brain: Refresh Status"
+      },
+      {
+        "command": "brainMd.setupWorkspace",
+        "title": "Brain: Set Up Workspace"
       }
     ]
   },
