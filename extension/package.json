@@ -20,8 +20,30 @@
           "type": "string",
           "default": "",
           "description": "Absolute path to a brain-page bin/brain.mjs to use instead of the CLI bundled with this extension. Leave empty to use the bundled copy (or a repo-local skills/brain-page/bin/brain.mjs, when working on brain.md itself)."
+        },
+        "brainMd.guard.readonly": {
+          "type": "boolean",
+          "default": true,
+          "description": "Add the brain data directory to files.readonlyInclude so the editor refuses to save over a brain file directly — all writes must go through the brain CLI."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "brainMd",
+          "title": "Brain",
+          "icon": "media/brain.svg"
+        }
+      ]
+    },
+    "views": {
+      "brainMd": [
+        {
+          "id": "brainMd.tree",
+          "name": "Brain"
+        }
+      ]
     },
     "commands": [
       {
@@ -30,9 +52,33 @@
       },
       {
         "command": "brainMd.setupWorkspace",
-        "title": "Brain: Set Up Workspace"
+        "title": "Brain: Set Up Workspace",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "brainMd.newPage",
+        "title": "Brain: New Page",
+        "icon": "$(add)"
+      },
+      {
+        "command": "brainMd.reindex",
+        "title": "Brain: Reindex",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "brainMd.lintLinks",
+        "title": "Brain: Lint Links",
+        "icon": "$(check)"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        { "command": "brainMd.setupWorkspace", "when": "view == brainMd.tree", "group": "navigation@1" },
+        { "command": "brainMd.newPage", "when": "view == brainMd.tree", "group": "navigation@2" },
+        { "command": "brainMd.reindex", "when": "view == brainMd.tree", "group": "navigation@3" },
+        { "command": "brainMd.lintLinks", "when": "view == brainMd.tree", "group": "navigation@4" }
+      ]
+    }
   },
   "scripts": {
     "build": "node esbuild.mjs",

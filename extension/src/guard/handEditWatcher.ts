@@ -1,0 +1,48 @@
+import * as vscode from "vscode";
+import { msSinceLastBrainCliActivity } from "../cli";
+import { brainReadonlyGlob } from "./readonlyGlob";
+
+// A CLI-driven write and the resulting file-system event aren't atomic —
+// give the watcher this much slack after any runBrain() call before it
+// treats a change as out-of-band.
+const SUPPRESSION_WINDOW_MS = 4000;
+
+/**
+ * Warn when a file under the brain dir changes without a recent runBrain()
+ * call behind it — the closest an editor extension can get to catching a
+ * hand edit, since (per BRAIN.md) "nothing at the file layer can stop a
+ * manual edit, and there is no validator to catch one afterwards".
+ */
+export class HandEditWatcher implements vscode.Disposable {
+  private watcher: vscode.FileSystemWatcher | undefined;
+
+  constructor(private readonly output: vscode.OutputChannel) {}
+
+  watch(workspaceRoot: string, brainDir: string): void {
+    this.dispose();
+
+    const glob = brainReadonlyGlob(workspaceRoot, brainDir);
+    if (!glob) return; // brainRoot sidecar outside the workspace — not watchable this way
+
+    const pattern = new vscode.RelativePattern(workspaceRoot, glob);
+    this.watcher = vscode.workspace.createFileSystemWatcher(pattern, /* ignoreCreate */ false, /* ignoreChange */ false, /* ignoreDelete */ true);
+    this.watcher.onDidChange((uri) => this.handle(workspaceRoot, uri));
+    this.watcher.onDidCreate((uri) => this.handle(workspaceRoot, uri));
+  }
+
+  private handle(workspaceRoot: string, uri: vscode.Uri): void {
+    if (msSinceLastBrainCliActivity(workspaceRoot) < SUPPRESSION_WINDOW_MS) return;
+
+    this.output.appendLine(`brain guard: out-of-band change detected at ${uri.fsPath}`);
+    void vscode.window
+      .showWarningMessage(`brain.md: "${vscode.workspace.asRelativePath(uri)}" was modified outside the brain CLI.`, "Show File", "Ignore")
+      .then((choice) => {
+        if (choice === "Show File") void vscode.window.showTextDocument(uri);
+      });
+  }
+
+  dispose(): void {
+    this.watcher?.dispose();
+    this.watcher = undefined;
+  }
+}

@@ -13,6 +13,17 @@ export interface RunBrainOptions {
   stdin?: string;
 }
 
+// Timestamp of the most recent runBrain() call, keyed by resolved cwd. The
+// hand-edit guard uses this to tell a CLI-driven write (expected) apart from
+// an out-of-band edit (warn) without runBrain needing to know anything about
+// vscode or watchers — it just records that *a* brain invocation happened.
+const lastActivityByCwd = new Map<string, number>();
+
+export function msSinceLastBrainCliActivity(cwd: string): number {
+  const last = lastActivityByCwd.get(cwd);
+  return last === undefined ? Infinity : Date.now() - last;
+}
+
 /**
  * Spawn the brain CLI with the extension host's own Node (process.execPath),
  * so the workspace doesn't need `node` on PATH. This is the ONLY function
@@ -20,6 +31,7 @@ export interface RunBrainOptions {
  * behavior is reimplemented here; every mutation goes through the real CLI.
  */
 export function runBrain(cliPath: string, args: string[], opts: RunBrainOptions): Promise<RunResult> {
+  lastActivityByCwd.set(opts.cwd, Date.now());
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd: opts.cwd,
@@ -31,7 +43,10 @@ export function runBrain(cliPath: string, args: string[], opts: RunBrainOptions)
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
     child.on("error", reject);
-    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? -1 }));
+    child.on("close", (code) => {
+      lastActivityByCwd.set(opts.cwd, Date.now());
+      resolve({ stdout, stderr, code: code ?? -1 });
+    });
 
     if (opts.stdin !== undefined) {
       child.stdin.write(opts.stdin);
