@@ -8,3 +8,11 @@
 # ship in skills/brain-setup/assets/; these root copies are local-only, not product.
 /BRAIN.md
 /CLAUDE.md
+
+# VS Code / code-server extension build artifacts — derived from extension/src
+# and skills/, not checked in.
+/extension/node_modules/
+/extension/out/
+/extension/dist/
+/extension/assets/
+/extension/*.vsix

@@ -1,0 +1,91 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+export interface RunResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+export interface RunBrainOptions {
+  cwd: string;
+  stdin?: string;
+}
+
+// Timestamp of the most recent runBrain() call, keyed by resolved cwd. The
+// hand-edit guard uses this to tell a CLI-driven write (expected) apart from
+// an out-of-band edit (warn) without runBrain needing to know anything about
+// vscode or watchers — it just records that *a* brain invocation happened.
+const lastActivityByCwd = new Map<string, number>();
+
+export function msSinceLastBrainCliActivity(cwd: string): number {
+  const last = lastActivityByCwd.get(cwd);
+  return last === undefined ? Infinity : Date.now() - last;
+}
+
+/**
+ * Spawn the brain CLI with the extension host's own Node (process.execPath),
+ * so the workspace doesn't need `node` on PATH. This is the ONLY function
+ * through which the extension ever touches a brain file — no subcommand's
+ * behavior is reimplemented here; every mutation goes through the real CLI.
+ */
+export function runBrain(cliPath: string, args: string[], opts: RunBrainOptions): Promise<RunResult> {
+  lastActivityByCwd.set(opts.cwd, Date.now());
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, ...args], {
+      cwd: opts.cwd,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      lastActivityByCwd.set(opts.cwd, Date.now());
+      resolve({ stdout, stderr, code: code ?? -1 });
+    });
+
+    if (opts.stdin !== undefined) {
+      child.stdin.write(opts.stdin);
+    }
+    child.stdin.end();
+  });
+}
+
+export interface ResolveCliPathOptions {
+  /** From the brainMd.cliPath setting, if the user configured one. */
+  configured?: string;
+  /** The workspace folder root brain.md is being used from. */
+  workspaceRoot: string;
+  /** extension/assets, where esbuild stages a copy of ../skills at build time. */
+  extensionAssetsDir: string;
+}
+
+const CLI_RELATIVE_PATH = join("skills", "brain-page", "bin", "brain.mjs");
+
+/**
+ * Resolve the brain CLI script to invoke, in precedence order:
+ *   1. brainMd.cliPath, if it points at a file that exists;
+ *   2. a repo-local skills/brain-page/bin/brain.mjs — so the extension
+ *      self-hosts off the live source when working ON brain.md itself,
+ *      instead of the bundled copy;
+ *   3. the copy bundled into the extension at build time.
+ * A bad or missing setting falls through silently rather than throwing. The
+ * bundled path is always returned as the last resort, even if it doesn't
+ * exist yet, so callers have one consistent path to report an error against.
+ */
+export function resolveCliPath(opts: ResolveCliPathOptions): string {
+  if (opts.configured && existsSync(opts.configured)) {
+    return opts.configured;
+  }
+
+  const repoLocal = join(opts.workspaceRoot, CLI_RELATIVE_PATH);
+  if (existsSync(repoLocal)) {
+    return repoLocal;
+  }
+
+  return join(opts.extensionAssetsDir, CLI_RELATIVE_PATH);
+}
