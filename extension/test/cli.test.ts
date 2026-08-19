@@ -97,3 +97,27 @@ test("runBrain reports a non-zero exit code without throwing", async () => {
     assert.equal(result.stderr, "boom");
   });
 });
+
+test("runBrain rejects and kills the child when it exceeds the timeout", async () => {
+  await withTempDir(async (dir) => {
+    const script = join(dir, "hang.mjs");
+    writeFileSync(script, "setInterval(() => {}, 1000);"); // never exits on its own
+
+    await assert.rejects(runBrain(script, [], { cwd: dir, timeoutMs: 200 }), /timed out/);
+  });
+});
+
+test("runBrain does not crash when the child exits before reading a large stdin write", async () => {
+  await withTempDir(async (dir) => {
+    const script = join(dir, "exit-immediately.mjs");
+    writeFileSync(script, "process.exit(0);"); // never touches stdin
+
+    // A write this size is far more likely to hit backpressure/EPIPE on a
+    // child that closed its stdin before reading — this is what would
+    // throw an unhandled 'error' event without the guard in cli.ts.
+    const bigStdin = "x".repeat(5_000_000);
+    const result = await runBrain(script, [], { cwd: dir, stdin: bigStdin });
+
+    assert.equal(result.code, 0);
+  });
+});
