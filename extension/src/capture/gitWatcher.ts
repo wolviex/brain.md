@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { relative, sep } from "node:path";
 import type { CapturedCommit } from "./filter";
 
 // A minimal slice of the vscode.git extension's exported API (version 1) —
@@ -185,12 +186,23 @@ export class GitWatcher implements vscode.Disposable {
         // as brain-only.
         return { files: [], unknown: true };
       }
-      return { files: changes.map((c) => vscode.workspace.asRelativePath(c.uri, false)), unknown: false };
+      return { files: changes.map((c) => this.toRepoRelative(repo, c.uri)), unknown: false };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.output.appendLine(`brain capture: failed to diff ${entry.hash.slice(0, 7)} in ${repo.rootUri.fsPath} — ${message}`);
       return { files: [], unknown: true };
     }
+  }
+
+  /**
+   * `vscode.workspace.asRelativePath` is relative to the *workspace
+   * folder*, and returns the input unchanged (i.e. absolute) for a path
+   * outside every open folder. filter.ts needs paths consistently relative
+   * to the *git repo root* regardless of which subdirectory is open as the
+   * workspace, so this computes that directly instead.
+   */
+  private toRepoRelative(repo: GitRepository, uri: vscode.Uri): string {
+    return relative(repo.rootUri.fsPath, uri.fsPath).split(sep).join("/");
   }
 
   dispose(): void {

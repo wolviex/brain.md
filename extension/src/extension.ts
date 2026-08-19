@@ -9,7 +9,7 @@ import { applyReadonlyGuard } from "./guard/readonly";
 import { HandEditWatcher } from "./guard/handEditWatcher";
 import { LintDiagnostics } from "./guard/lintDiagnostics";
 import { GitWatcher } from "./capture/gitWatcher";
-import { shouldCapture, type CapturedCommit } from "./capture/filter";
+import { isWithinDir, shouldCapture, type CapturedCommit } from "./capture/filter";
 import { emptyQueueState, enqueueCommits, markHandled, type QueueState } from "./capture/queue";
 import { runReviewUi } from "./review/reviewUi";
 import { installAgentSkills } from "./skillsInstall";
@@ -87,14 +87,37 @@ async function persistLastSeen(context: vscode.ExtensionContext, repoRoot: strin
 }
 
 /**
+ * Find the workspace folder a git repo belongs to. Deliberately not just an
+ * exact-path match: a workspace opened on a subdirectory of the repo (the
+ * folder nested inside the repo) is the scenario the repoRoot/workspaceRoot
+ * split in filter.ts exists to handle correctly, so it must resolve to a
+ * folder here rather than falling through. A workspace folder that itself
+ * contains the repo as a subdirectory (a folder holding several repos) is
+ * also accepted, but only when there's exactly one open folder — with more
+ * than one, which repo belongs to which folder is genuinely ambiguous, and
+ * guessing is how a commit ends up written into the wrong project's brain.
+ */
+function resolveFolderForRepo(repoRoot: string): vscode.WorkspaceFolder | undefined {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const nested = folders.find((f) => f.uri.fsPath === repoRoot || isWithinDir(f.uri.fsPath, repoRoot));
+  if (nested) return nested;
+  if (folders.length === 1 && isWithinDir(repoRoot, folders[0].uri.fsPath)) return folders[0];
+  return undefined;
+}
+
+/**
  * A new batch of commits from the git watcher. Detection only — this never
  * writes to the brain itself. Commits that pass the feedback-loop filter
  * are queued; a human (or agent, in review) decides what's actually durable.
  */
 async function handleNewCommits(context: vscode.ExtensionContext, repoRoot: string, commits: CapturedCommit[]): Promise<void> {
-  const folder =
-    vscode.workspace.workspaceFolders?.find((f) => f.uri.fsPath === repoRoot) ?? vscode.workspace.workspaceFolders?.[0];
-  if (!folder) return;
+  const folder = resolveFolderForRepo(repoRoot);
+  if (!folder) {
+    output?.appendLine(
+      `brain capture: ${commits.length} commit(s) in ${repoRoot} don't map unambiguously to an open workspace folder — skipped.`,
+    );
+    return;
+  }
 
   const cliPath = resolveCliPathForFolder(context, folder);
   let capturable: CapturedCommit[];
@@ -103,6 +126,7 @@ async function handleNewCommits(context: vscode.ExtensionContext, repoRoot: stri
     const config = vscode.workspace.getConfiguration("brainMd", folder);
     capturable = commits.filter((commit) =>
       shouldCapture(commit, {
+        repoRoot,
         workspaceRoot: folder.uri.fsPath,
         brainDir,
         includeMerges: config.get<boolean>("capture.includeMerges", false),

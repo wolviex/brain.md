@@ -1,4 +1,4 @@
-import { relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 
 export interface CapturedCommit {
   sha: string;
@@ -21,6 +21,9 @@ export interface CapturedCommit {
 }
 
 export interface FilterOptions {
+  /** Git repository root — `commit.files` are relative to this, not necessarily workspaceRoot. */
+  repoRoot: string;
+  /** The vscode workspace folder the brain CLI runs from — where `brain wire` writes BRAIN.md / CLAUDE.md / AGENTS.md. */
   workspaceRoot: string;
   brainDir: string;
   includeMerges?: boolean;
@@ -44,18 +47,40 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${pattern}$`);
 }
 
-function isWithinBrainDir(file: string, workspaceRoot: string, brainDir: string): boolean {
-  const relBrainDir = normalize(relative(workspaceRoot, brainDir));
-  if (!relBrainDir || relBrainDir.startsWith("..")) return false; // brainRoot sidecar outside the workspace
-  return file === relBrainDir || file.startsWith(`${relBrainDir}/`);
+/**
+ * True when `absolutePath` is `dir` itself or nested under it. Both inputs
+ * must already be absolute — this does no relativizing of its own, so it
+ * works the same whether `dir` sits inside, outside, or as a sibling of
+ * whatever root `absolutePath` was originally expressed relative to. That's
+ * the fix for the case a plain `relative(workspaceRoot, brainDir)` check
+ * can't handle: a brainRoot sidecar that is outside the *workspace folder*
+ * but still inside the *repo* (e.g. the workspace is opened on a
+ * subdirectory of a monorepo) used to make every file compare as "outside",
+ * so isWithinDir would short-circuit to false and the guard never engaged.
+ */
+export function isWithinDir(absolutePath: string, dir: string): boolean {
+  const rel = normalize(relative(dir, absolutePath));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-/** True when every changed file is inside the brain dir or is a wiring file — the feedback-loop guard. */
-export function isBrainOnlyCommit(files: string[], workspaceRoot: string, brainDir: string): boolean {
+/**
+ * True when every changed file is inside the brain dir or is a wiring file
+ * — the feedback-loop guard. `files` are relative to `repoRoot` (that's
+ * what the Git extension's diff API is naturally rooted at); wiring files
+ * are relative to `workspaceRoot` (that's the brain CLI's cwd, which
+ * `brain wire` uses to place BRAIN.md / CLAUDE.md / AGENTS.md) — the two
+ * roots coincide in the common case but not when a workspace is opened on
+ * a subdirectory of the repo.
+ */
+export function isBrainOnlyCommit(files: string[], repoRoot: string, workspaceRoot: string, brainDir: string): boolean {
   if (files.length === 0) return true;
   return files.every((f) => {
-    const file = normalize(f);
-    return WIRING_FILES.has(file) || isWithinBrainDir(file, workspaceRoot, brainDir);
+    const absoluteFile = join(repoRoot, normalize(f));
+    if (isWithinDir(absoluteFile, workspaceRoot)) {
+      const relToWorkspace = normalize(relative(workspaceRoot, absoluteFile));
+      if (WIRING_FILES.has(relToWorkspace)) return true;
+    }
+    return isWithinDir(absoluteFile, brainDir);
   });
 }
 
@@ -67,7 +92,7 @@ export function shouldCapture(commit: CapturedCommit, opts: FilterOptions): bool
   // brain-only check and the ignoreGlobs check below, silently dropping a
   // commit we simply failed to inspect.
   if (commit.filesUnknown) return true;
-  if (isBrainOnlyCommit(commit.files, opts.workspaceRoot, opts.brainDir)) return false;
+  if (isBrainOnlyCommit(commit.files, opts.repoRoot, opts.workspaceRoot, opts.brainDir)) return false;
 
   const globs = (opts.ignoreGlobs ?? []).map(globToRegExp);
   if (globs.length > 0 && commit.files.every((f) => globs.some((re) => re.test(normalize(f))))) {
