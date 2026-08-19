@@ -40,6 +40,9 @@ interface GitAPI {
 }
 
 interface GitExtensionExports {
+  /** getAPI(1) throws if this is false — the Git extension itself is disabled ("git.enabled": false), not just uninitialized. */
+  readonly enabled: boolean;
+  readonly onDidChangeEnablement: vscode.Event<boolean>;
   getAPI(version: 1): GitAPI;
 }
 
@@ -81,6 +84,24 @@ export class GitWatcher implements vscode.Disposable {
     }
 
     const exports = gitExtension.isActive ? gitExtension.exports : await gitExtension.activate();
+
+    if (!exports.enabled) {
+      // getAPI(1) throws in this state rather than returning something
+      // usable — this is the documented "git.enabled": false case, not the
+      // uninitialized-but-enabled case the state machine below handles.
+      // Wait for it to flip on rather than failing start() outright: a
+      // user can toggle git.enabled mid-session.
+      this.output.appendLine('brain capture: the Git extension is disabled ("git.enabled": false) — commit capture will start once it\'s re-enabled.');
+      const sub = exports.onDidChangeEnablement((enabled) => {
+        if (enabled) {
+          sub.dispose();
+          void this.start();
+        }
+      });
+      this.disposables.push(sub);
+      return;
+    }
+
     const api = exports.getAPI(1);
 
     const attach = () => {

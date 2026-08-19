@@ -11,7 +11,11 @@ export interface RunResult {
 export interface RunBrainOptions {
   cwd: string;
   stdin?: string;
+  /** Milliseconds before giving up and killing the child. Defaults to 30s. */
+  timeoutMs?: number;
 }
+
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 // Timestamp of the most recent runBrain() call, keyed by resolved cwd. The
 // hand-edit guard uses this to tell a CLI-driven write (expected) apart from
@@ -58,10 +62,36 @@ export function runBrain(cliPath: string, args: string[], opts: RunBrainOptions)
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill();
+      reject(new Error(`brain CLI timed out after ${timeoutMs}ms: node ${cliPath} ${args.join(" ")}`));
+    }, timeoutMs);
+
+    // Writing to a child that has already exited raises 'error' (EPIPE /
+    // ERR_STREAM_DESTROYED) on the stdin stream; with no listener, Node
+    // treats that as an uncaught exception in the extension host. The
+    // 'close' handler below still fires and reports the real outcome via
+    // the resolved/rejected promise, so this listener only needs to stop
+    // the error from propagating unheard.
+    child.stdin.on("error", () => {});
+
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-    child.on("error", reject);
+    child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       lastActivityByCwd.set(opts.cwd, Date.now());
       resolve({ stdout, stderr, code: code ?? -1 });
     });

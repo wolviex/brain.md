@@ -15,6 +15,7 @@ import { runReviewUi } from "./review/reviewUi";
 import { installAgentSkills } from "./skillsInstall";
 
 const SETUP_PROMPTED_KEY = "brainMd.setupPrompted";
+const GUARD_CONSENT_KEY = "brainMd.guardConsent";
 const QUEUE_STATE_KEY = "brainMd.captureQueue";
 const LAST_SEEN_KEY = "brainMd.captureLastSeen";
 const PAGE_CATEGORIES = ["project", "concept", "decision", "person", "reference"] as const;
@@ -62,7 +63,10 @@ export function activate(context: vscode.ExtensionContext): void {
       (repoRoot, sha) => void persistLastSeen(context, repoRoot, sha),
     );
     context.subscriptions.push(gitWatcher);
-    void gitWatcher.start();
+    void gitWatcher.start().catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      output?.appendLine(`brain capture: failed to start — ${message}`);
+    });
   }
 
   void refreshStatus(context).then(() => maybePromptSetup(context));
@@ -153,6 +157,29 @@ async function handleNewCommits(context: vscode.ExtensionContext, repoRoot: stri
   await refreshStatus(context);
 }
 
+/**
+ * The readonly guard and the hand-edit watcher both modify the user's
+ * editor experience for this repo — the former writes .vscode/settings.json
+ * directly. Ask once per workspace before turning either on, rather than
+ * applying them the instant a brain dir is observed to exist: that would
+ * fire even for a workspace whose brain came pre-populated from a git
+ * clone, with no setup step (and so no natural place to ask) ever run.
+ * Answered "no" is remembered too, so this never asks twice.
+ */
+async function ensureGuardConsent(context: vscode.ExtensionContext): Promise<boolean> {
+  const existing = context.workspaceState.get<boolean>(GUARD_CONSENT_KEY);
+  if (existing !== undefined) return existing;
+
+  const choice = await vscode.window.showInformationMessage(
+    "brain.md: mark the brain directory read-only in this workspace's editor settings, and warn if a brain file changes outside the brain CLI?",
+    "Enable Guards",
+    "Not Now",
+  );
+  const granted = choice === "Enable Guards";
+  await context.workspaceState.update(GUARD_CONSENT_KEY, granted);
+  return granted;
+}
+
 async function refreshStatus(context: vscode.ExtensionContext): Promise<void> {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) {
@@ -179,8 +206,10 @@ async function refreshStatus(context: vscode.ExtensionContext): Promise<void> {
   output?.appendLine(`brain-dir: ${JSON.stringify(info)}`);
 
   if (info.exists) {
-    await applyReadonlyGuard(workspaceRoot, info.dir);
-    handEditWatcher?.watch(workspaceRoot, info.dir);
+    if (await ensureGuardConsent(context)) {
+      await applyReadonlyGuard(workspaceRoot, info.dir, output);
+      handEditWatcher?.watch(workspaceRoot, info.dir);
+    }
     const counts = await lintDiagnostics?.refresh(cliPath, workspaceRoot);
     if (counts) output?.appendLine(`lint-links: ${counts.errorCount} error(s), ${counts.warningCount} warning(s)`);
   }
