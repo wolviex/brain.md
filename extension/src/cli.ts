@@ -24,6 +24,24 @@ export function msSinceLastBrainCliActivity(cwd: string): number {
   return last === undefined ? Infinity : Date.now() - last;
 }
 
+// A longer-lived, explicitly-set counterpart to the map above. Agent handoff
+// launches an interactive CLI session in its own terminal process — writes
+// from that session never call runBrain() in this extension host, so the
+// short per-invocation window above can't cover it, and a real review
+// session can run for minutes across several separate writes. Set once on a
+// confirmed handoff launch rather than refreshed per-write, since nothing
+// in this process observes the session's actual activity.
+const externalAgentActiveUntil = new Map<string, number>();
+
+export function markExternalAgentActive(cwd: string, forMs: number): void {
+  externalAgentActiveUntil.set(cwd, Date.now() + forMs);
+}
+
+export function isExternalAgentActive(cwd: string): boolean {
+  const until = externalAgentActiveUntil.get(cwd);
+  return until !== undefined && Date.now() < until;
+}
+
 /**
  * Spawn the brain CLI with the extension host's own Node (process.execPath),
  * so the workspace doesn't need `node` on PATH. This is the ONLY function

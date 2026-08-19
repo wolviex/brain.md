@@ -45,10 +45,13 @@ export async function runReviewUi(ctx: ReviewContext, pending: CapturedCommit[])
   }
 
   if (outcome.value === "agent") {
-    // The agent does the actual CLI writes on its own time; we can't observe
-    // when it finishes, so these are marked handled now and won't be
-    // re-offered — the queue's job was only ever to surface the commits.
-    const handedOff = await handoffToAgent(ctx.storageDir, ctx.workspaceRoot, selected);
+    // handoffToAgent() only reports success once it's confirmed a CLI is
+    // actually installed and the launch didn't die immediately; beyond
+    // that, the agent does its actual writes on its own time and we can't
+    // observe when it finishes, so a confirmed handoff is marked handled
+    // now rather than re-offered — the queue's job was only ever to
+    // surface the commits.
+    const handedOff = await handoffToAgent(ctx.cliPath, ctx.storageDir, ctx.workspaceRoot, selected);
     return handedOff ? selected.map((c) => c.sha) : [];
   }
 
