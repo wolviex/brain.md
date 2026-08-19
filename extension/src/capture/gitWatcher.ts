@@ -47,6 +47,14 @@ export type LastSeenChangedHandler = (repoRoot: string, sha: string) => void;
 
 const DEBOUNCE_MS = 500;
 
+// Repository.log() only honors `maxEntries` when `range` is absent (verified
+// against the Git extension's own implementation — the two are mutually
+// exclusive branches there), so a wide range from a branch switch or a
+// long-overdue `git pull` can return thousands of commits despite the
+// maxEntries we pass. Enforce our own cap so we never fan out one `git diff`
+// subprocess per commit across an unbounded batch.
+const MAX_COMMITS_PER_BATCH = 50;
+
 /**
  * Watches every open git repository for new commits via the built-in Git
  * extension (not a post-commit hook) — this catches commits made from the
@@ -123,10 +131,21 @@ export class GitWatcher implements vscode.Disposable {
     }
 
     try {
-      const log = await repo.log({ range: `${lastSeen}..${head}`, maxEntries: 50 });
+      // maxEntries is passed defensively (see MAX_COMMITS_PER_BATCH's
+      // comment) but the real enforcement is the slice below, which holds
+      // regardless of whether the API honors it.
+      const log = await repo.log({ range: `${lastSeen}..${head}`, maxEntries: MAX_COMMITS_PER_BATCH + 1 });
+      if (log.length > MAX_COMMITS_PER_BATCH) {
+        this.output.appendLine(
+          `brain capture: ${log.length}+ commits between ${lastSeen.slice(0, 7)} and ${head.slice(0, 7)} in ${root} ` +
+            `(branch switch or large pull?) — capturing only the most recent ${MAX_COMMITS_PER_BATCH}.`,
+        );
+      }
+      const capped = log.slice(0, MAX_COMMITS_PER_BATCH);
+
       const commits: CapturedCommit[] = [];
-      for (const entry of log) {
-        const files = await this.changedFiles(repo, entry);
+      for (const entry of capped) {
+        const { files, unknown } = await this.changedFiles(repo, entry);
         commits.push({
           sha: entry.hash,
           subject: entry.message.split("\n")[0] ?? "",
@@ -134,6 +153,7 @@ export class GitWatcher implements vscode.Disposable {
           author: entry.authorName ?? "",
           date: entry.authorDate ? entry.authorDate.toISOString() : "",
           files,
+          filesUnknown: unknown,
           isMerge: (entry.parents?.length ?? 0) > 1,
         });
       }
@@ -147,14 +167,29 @@ export class GitWatcher implements vscode.Disposable {
     }
   }
 
-  private async changedFiles(repo: GitRepository, entry: GitCommit): Promise<string[]> {
+  private async changedFiles(repo: GitRepository, entry: GitCommit): Promise<{ files: string[]; unknown: boolean }> {
     const parent = entry.parents?.[0];
-    if (!parent) return [];
+    if (!parent) {
+      // Root commit — nothing to diff against here. Treat as unknown (never
+      // silently "brain-only") so a repo's founding commit isn't uncapturable.
+      return { files: [], unknown: true };
+    }
     try {
       const changes = await repo.diffBetween(parent, entry.hash);
-      return changes.map((c) => vscode.workspace.asRelativePath(c.uri, false));
-    } catch {
-      return [];
+      if (changes.length === 0) {
+        // A genuine zero-file commit is vanishingly rare, and the Git
+        // extension's diff implementation resolves — rather than rejects —
+        // with an empty array on a failed git invocation, so an empty
+        // result here is indistinguishable from a masked failure. Treat it
+        // as unknown rather than risk silently classifying a real commit
+        // as brain-only.
+        return { files: [], unknown: true };
+      }
+      return { files: changes.map((c) => vscode.workspace.asRelativePath(c.uri, false)), unknown: false };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.output.appendLine(`brain capture: failed to diff ${entry.hash.slice(0, 7)} in ${repo.rootUri.fsPath} — ${message}`);
+      return { files: [], unknown: true };
     }
   }
 

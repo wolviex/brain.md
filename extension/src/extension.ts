@@ -97,22 +97,30 @@ async function handleNewCommits(context: vscode.ExtensionContext, repoRoot: stri
   if (!folder) return;
 
   const cliPath = resolveCliPathForFolder(context, folder);
-  let brainDir: string;
+  let capturable: CapturedCommit[];
   try {
-    brainDir = (await getBrainDir(cliPath, folder.uri.fsPath)).dir;
-  } catch {
-    return;
+    const brainDir = (await getBrainDir(cliPath, folder.uri.fsPath)).dir;
+    const config = vscode.workspace.getConfiguration("brainMd", folder);
+    capturable = commits.filter((commit) =>
+      shouldCapture(commit, {
+        workspaceRoot: folder.uri.fsPath,
+        brainDir,
+        includeMerges: config.get<boolean>("capture.includeMerges", false),
+        ignoreGlobs: config.get<string[]>("capture.ignoreGlobs", []),
+      }),
+    );
+  } catch (err) {
+    // The git watcher already advanced past these commits (see
+    // GitWatcher.checkForNewCommits), so returning here without queuing
+    // anything would lose them permanently. The feedback-loop filter can't
+    // run without a resolved brain dir, so queue everything unfiltered
+    // instead — one spurious dismissal in review beats silent data loss.
+    const message = err instanceof Error ? err.message : String(err);
+    output?.appendLine(
+      `brain capture: couldn't resolve brain-dir for ${repoRoot}, queuing ${commits.length} commit(s) unfiltered — ${message}`,
+    );
+    capturable = commits;
   }
-
-  const config = vscode.workspace.getConfiguration("brainMd", folder);
-  const capturable = commits.filter((commit) =>
-    shouldCapture(commit, {
-      workspaceRoot: folder.uri.fsPath,
-      brainDir,
-      includeMerges: config.get<boolean>("capture.includeMerges", false),
-      ignoreGlobs: config.get<string[]>("capture.ignoreGlobs", []),
-    }),
-  );
   if (capturable.length === 0) return;
 
   const next = enqueueCommits(loadQueueState(context), capturable);

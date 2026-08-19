@@ -86,3 +86,26 @@ test("shouldCapture ignore globs support single-segment * wildcards", () => {
   const c = commit({ files: ["package-lock.json"] });
   assert.equal(shouldCapture(c, { workspaceRoot, brainDir, ignoreGlobs: ["*.json"] }), false);
 });
+
+test("shouldCapture keeps a filesUnknown commit even though its file list is empty", () => {
+  // An empty `files` array normally reads as brain-only (nothing to
+  // capture). filesUnknown means we couldn't actually determine the files
+  // — capture it rather than let it vacuously pass the brain-only check.
+  const c = commit({ files: [], filesUnknown: true });
+  assert.equal(shouldCapture(c, { workspaceRoot, brainDir }), true);
+});
+
+test("shouldCapture keeps a filesUnknown commit even with matching ignoreGlobs", () => {
+  // Same vacuous-pass hazard on the ignoreGlobs branch: [].every(...) is
+  // true, so without the filesUnknown short-circuit this would also be
+  // silently dropped.
+  const c = commit({ files: [], filesUnknown: true });
+  assert.equal(shouldCapture(c, { workspaceRoot, brainDir, ignoreGlobs: ["**"] }), true);
+});
+
+test("shouldCapture still drops a filesUnknown merge commit when includeMerges is off", () => {
+  // Merge-dropping is a deliberate user choice, not a data-loss concern —
+  // filesUnknown shouldn't override it.
+  const c = commit({ files: [], filesUnknown: true, isMerge: true });
+  assert.equal(shouldCapture(c, { workspaceRoot, brainDir }), false);
+});
