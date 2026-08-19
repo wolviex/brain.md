@@ -8,6 +8,8 @@ import {
   hasPreCommitHook,
   readExistingPreCommitHook,
   installPreCommitHook,
+  detectProjectMode,
+  type ProjectMode,
 } from "./setupFiles";
 
 const WIRE_AGENTS = ["claude-code", "codex", "opencode", "cursor", "pi"] as const;
@@ -43,6 +45,8 @@ export async function runSetupFlow(ctx: SetupContext): Promise<void> {
   const brainMdResult = ensureBrainMd(ctx.assetsDir, ctx.workspaceRoot);
   log(brainMdResult === "created" ? "created BRAIN.md" : "BRAIN.md already present, left untouched");
 
+  const freshlyScaffolded = !info.populated;
+
   if (info.populated) {
     if (info.source === "brainRoot") {
       log(`brain already lives at ${info.dir} (redirected via brainRoot) — leaving it untouched`);
@@ -77,6 +81,42 @@ export async function runSetupFlow(ctx: SetupContext): Promise<void> {
   await maybeInstallPreCommitHook(ctx, log);
 
   void vscode.window.showInformationMessage(`brain.md: workspace set up (brain at ${info.dir}).`);
+
+  if (freshlyScaffolded) {
+    await nudgeBootstrap(ctx, log);
+  }
+}
+
+/**
+ * brain-setup only ever stamps down empty templates — it has no reasoning
+ * of its own. Filling them with real project knowledge is the separate
+ * brain-bootstrap skill (reads code/docs/git log on brownfield, interviews
+ * the user on greenfield), which only an agent can run. Nudge toward it
+ * right after a fresh scaffold, since nothing else in the workflow surfaces
+ * that second step.
+ */
+async function nudgeBootstrap(ctx: SetupContext, log: (msg: string) => void): Promise<void> {
+  const mode: ProjectMode = detectProjectMode(ctx.workspaceRoot);
+  log(`project looks ${mode} — nudging to run brain-bootstrap`);
+
+  const prompt =
+    mode === "brownfield"
+      ? "Run the brain-bootstrap skill to seed this project's brain: read the existing code, docs, and git log to draft the six root pages and capture key historical decisions, through the brain CLI."
+      : "Run the brain-bootstrap skill to seed this project's brain: interview me about the project's goal, target users, non-goals, and rough shape, then seed background (and stack/roadmap if I have a sense of them) through the brain CLI.";
+
+  const message =
+    mode === "brownfield"
+      ? "brain.md: this looks like an existing project. The brain is scaffolded but still empty — ask your coding agent to run the brain-bootstrap skill to seed it from your code and git history."
+      : "brain.md: the brain is scaffolded but still empty — ask your coding agent to run the brain-bootstrap skill. It'll interview you to seed it.";
+
+  const choice = await vscode.window.showInformationMessage(message, "Copy Agent Prompt", "Install Agent Skills…");
+
+  if (choice === "Copy Agent Prompt") {
+    await vscode.env.clipboard.writeText(prompt);
+    void vscode.window.showInformationMessage("brain.md: prompt copied — paste it into your coding agent's chat.");
+  } else if (choice === "Install Agent Skills…") {
+    await vscode.commands.executeCommand("brainMd.installSkills");
+  }
 }
 
 async function pickAgentsToWire(): Promise<WireAgent[]> {
