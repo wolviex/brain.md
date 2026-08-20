@@ -9,12 +9,13 @@ import { applyReadonlyGuard } from "./guard/readonly";
 import { HandEditWatcher } from "./guard/handEditWatcher";
 import { LintDiagnostics } from "./guard/lintDiagnostics";
 import { GitWatcher } from "./capture/gitWatcher";
-import { shouldCapture, type CapturedCommit } from "./capture/filter";
+import { isWithinDir, shouldCapture, type CapturedCommit } from "./capture/filter";
 import { emptyQueueState, enqueueCommits, markHandled, type QueueState } from "./capture/queue";
 import { runReviewUi } from "./review/reviewUi";
 import { installAgentSkills } from "./skillsInstall";
 
 const SETUP_PROMPTED_KEY = "brainMd.setupPrompted";
+const GUARD_CONSENT_KEY = "brainMd.guardConsent";
 const QUEUE_STATE_KEY = "brainMd.captureQueue";
 const LAST_SEEN_KEY = "brainMd.captureLastSeen";
 const PAGE_CATEGORIES = ["project", "concept", "decision", "person", "reference"] as const;
@@ -62,7 +63,10 @@ export function activate(context: vscode.ExtensionContext): void {
       (repoRoot, sha) => void persistLastSeen(context, repoRoot, sha),
     );
     context.subscriptions.push(gitWatcher);
-    void gitWatcher.start();
+    void gitWatcher.start().catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      output?.appendLine(`brain capture: failed to start — ${message}`);
+    });
   }
 
   void refreshStatus(context).then(() => maybePromptSetup(context));
@@ -87,38 +91,93 @@ async function persistLastSeen(context: vscode.ExtensionContext, repoRoot: strin
 }
 
 /**
+ * Find the workspace folder a git repo belongs to. Deliberately not just an
+ * exact-path match: a workspace opened on a subdirectory of the repo (the
+ * folder nested inside the repo) is the scenario the repoRoot/workspaceRoot
+ * split in filter.ts exists to handle correctly, so it must resolve to a
+ * folder here rather than falling through. A workspace folder that itself
+ * contains the repo as a subdirectory (a folder holding several repos) is
+ * also accepted, but only when there's exactly one open folder — with more
+ * than one, which repo belongs to which folder is genuinely ambiguous, and
+ * guessing is how a commit ends up written into the wrong project's brain.
+ */
+function resolveFolderForRepo(repoRoot: string): vscode.WorkspaceFolder | undefined {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const nested = folders.find((f) => f.uri.fsPath === repoRoot || isWithinDir(f.uri.fsPath, repoRoot));
+  if (nested) return nested;
+  if (folders.length === 1 && isWithinDir(repoRoot, folders[0].uri.fsPath)) return folders[0];
+  return undefined;
+}
+
+/**
  * A new batch of commits from the git watcher. Detection only — this never
  * writes to the brain itself. Commits that pass the feedback-loop filter
  * are queued; a human (or agent, in review) decides what's actually durable.
  */
 async function handleNewCommits(context: vscode.ExtensionContext, repoRoot: string, commits: CapturedCommit[]): Promise<void> {
-  const folder =
-    vscode.workspace.workspaceFolders?.find((f) => f.uri.fsPath === repoRoot) ?? vscode.workspace.workspaceFolders?.[0];
-  if (!folder) return;
-
-  const cliPath = resolveCliPathForFolder(context, folder);
-  let brainDir: string;
-  try {
-    brainDir = (await getBrainDir(cliPath, folder.uri.fsPath)).dir;
-  } catch {
+  const folder = resolveFolderForRepo(repoRoot);
+  if (!folder) {
+    output?.appendLine(
+      `brain capture: ${commits.length} commit(s) in ${repoRoot} don't map unambiguously to an open workspace folder — skipped.`,
+    );
     return;
   }
 
-  const config = vscode.workspace.getConfiguration("brainMd", folder);
-  const capturable = commits.filter((commit) =>
-    shouldCapture(commit, {
-      workspaceRoot: folder.uri.fsPath,
-      brainDir,
-      includeMerges: config.get<boolean>("capture.includeMerges", false),
-      ignoreGlobs: config.get<string[]>("capture.ignoreGlobs", []),
-    }),
-  );
+  const cliPath = resolveCliPathForFolder(context, folder);
+  let capturable: CapturedCommit[];
+  try {
+    const brainDir = (await getBrainDir(cliPath, folder.uri.fsPath)).dir;
+    const config = vscode.workspace.getConfiguration("brainMd", folder);
+    capturable = commits.filter((commit) =>
+      shouldCapture(commit, {
+        repoRoot,
+        workspaceRoot: folder.uri.fsPath,
+        brainDir,
+        includeMerges: config.get<boolean>("capture.includeMerges", false),
+        ignoreGlobs: config.get<string[]>("capture.ignoreGlobs", []),
+      }),
+    );
+  } catch (err) {
+    // The git watcher already advanced past these commits (see
+    // GitWatcher.checkForNewCommits), so returning here without queuing
+    // anything would lose them permanently. The feedback-loop filter can't
+    // run without a resolved brain dir, so queue everything unfiltered
+    // instead — one spurious dismissal in review beats silent data loss.
+    const message = err instanceof Error ? err.message : String(err);
+    output?.appendLine(
+      `brain capture: couldn't resolve brain-dir for ${repoRoot}, queuing ${commits.length} commit(s) unfiltered — ${message}`,
+    );
+    capturable = commits;
+  }
   if (capturable.length === 0) return;
 
   const next = enqueueCommits(loadQueueState(context), capturable);
   await context.workspaceState.update(QUEUE_STATE_KEY, next);
   output?.appendLine(`brain capture: queued ${capturable.length} commit(s), ${next.pending.length} pending`);
   await refreshStatus(context);
+}
+
+/**
+ * The readonly guard and the hand-edit watcher both modify the user's
+ * editor experience for this repo — the former writes .vscode/settings.json
+ * directly. Ask once per workspace before turning either on, rather than
+ * applying them the instant a brain dir is observed to exist: that would
+ * fire even for a workspace whose brain came pre-populated from a git
+ * clone, with no setup step (and so no natural place to ask) ever run.
+ * Answered "no" is remembered too, so this never asks twice.
+ */
+async function ensureGuardConsent(context: vscode.ExtensionContext): Promise<boolean> {
+  const existing = context.workspaceState.get<boolean>(GUARD_CONSENT_KEY);
+  if (existing !== undefined) return existing;
+
+  const choice = await vscode.window.showInformationMessage(
+    "brain.md: mark the brain directory read-only in this workspace's editor settings, and warn if a brain file changes outside the brain CLI?",
+    "Enable Guards",
+    "Not Now",
+  );
+  const granted = choice === "Enable Guards";
+  await context.workspaceState.update(GUARD_CONSENT_KEY, granted);
+  return granted;
 }
 
 async function refreshStatus(context: vscode.ExtensionContext): Promise<void> {
@@ -147,8 +206,10 @@ async function refreshStatus(context: vscode.ExtensionContext): Promise<void> {
   output?.appendLine(`brain-dir: ${JSON.stringify(info)}`);
 
   if (info.exists) {
-    await applyReadonlyGuard(workspaceRoot, info.dir);
-    handEditWatcher?.watch(workspaceRoot, info.dir);
+    if (await ensureGuardConsent(context)) {
+      await applyReadonlyGuard(workspaceRoot, info.dir, output);
+      handEditWatcher?.watch(workspaceRoot, info.dir);
+    }
     const counts = await lintDiagnostics?.refresh(cliPath, workspaceRoot);
     if (counts) output?.appendLine(`lint-links: ${counts.errorCount} error(s), ${counts.warningCount} warning(s)`);
   }

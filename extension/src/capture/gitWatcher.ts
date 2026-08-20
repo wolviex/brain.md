@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { relative, sep } from "node:path";
 import type { CapturedCommit } from "./filter";
 
 // A minimal slice of the vscode.git extension's exported API (version 1) —
@@ -39,6 +40,9 @@ interface GitAPI {
 }
 
 interface GitExtensionExports {
+  /** getAPI(1) throws if this is false — the Git extension itself is disabled ("git.enabled": false), not just uninitialized. */
+  readonly enabled: boolean;
+  readonly onDidChangeEnablement: vscode.Event<boolean>;
   getAPI(version: 1): GitAPI;
 }
 
@@ -46,6 +50,14 @@ export type NewCommitsHandler = (repoRoot: string, commits: CapturedCommit[]) =>
 export type LastSeenChangedHandler = (repoRoot: string, sha: string) => void;
 
 const DEBOUNCE_MS = 500;
+
+// Repository.log() only honors `maxEntries` when `range` is absent (verified
+// against the Git extension's own implementation — the two are mutually
+// exclusive branches there), so a wide range from a branch switch or a
+// long-overdue `git pull` can return thousands of commits despite the
+// maxEntries we pass. Enforce our own cap so we never fan out one `git diff`
+// subprocess per commit across an unbounded batch.
+const MAX_COMMITS_PER_BATCH = 50;
 
 /**
  * Watches every open git repository for new commits via the built-in Git
@@ -72,6 +84,24 @@ export class GitWatcher implements vscode.Disposable {
     }
 
     const exports = gitExtension.isActive ? gitExtension.exports : await gitExtension.activate();
+
+    if (!exports.enabled) {
+      // getAPI(1) throws in this state rather than returning something
+      // usable — this is the documented "git.enabled": false case, not the
+      // uninitialized-but-enabled case the state machine below handles.
+      // Wait for it to flip on rather than failing start() outright: a
+      // user can toggle git.enabled mid-session.
+      this.output.appendLine('brain capture: the Git extension is disabled ("git.enabled": false) — commit capture will start once it\'s re-enabled.');
+      const sub = exports.onDidChangeEnablement((enabled) => {
+        if (enabled) {
+          sub.dispose();
+          void this.start();
+        }
+      });
+      this.disposables.push(sub);
+      return;
+    }
+
     const api = exports.getAPI(1);
 
     const attach = () => {
@@ -123,10 +153,21 @@ export class GitWatcher implements vscode.Disposable {
     }
 
     try {
-      const log = await repo.log({ range: `${lastSeen}..${head}`, maxEntries: 50 });
+      // maxEntries is passed defensively (see MAX_COMMITS_PER_BATCH's
+      // comment) but the real enforcement is the slice below, which holds
+      // regardless of whether the API honors it.
+      const log = await repo.log({ range: `${lastSeen}..${head}`, maxEntries: MAX_COMMITS_PER_BATCH + 1 });
+      if (log.length > MAX_COMMITS_PER_BATCH) {
+        this.output.appendLine(
+          `brain capture: ${log.length}+ commits between ${lastSeen.slice(0, 7)} and ${head.slice(0, 7)} in ${root} ` +
+            `(branch switch or large pull?) — capturing only the most recent ${MAX_COMMITS_PER_BATCH}.`,
+        );
+      }
+      const capped = log.slice(0, MAX_COMMITS_PER_BATCH);
+
       const commits: CapturedCommit[] = [];
-      for (const entry of log) {
-        const files = await this.changedFiles(repo, entry);
+      for (const entry of capped) {
+        const { files, unknown } = await this.changedFiles(repo, entry);
         commits.push({
           sha: entry.hash,
           subject: entry.message.split("\n")[0] ?? "",
@@ -134,6 +175,7 @@ export class GitWatcher implements vscode.Disposable {
           author: entry.authorName ?? "",
           date: entry.authorDate ? entry.authorDate.toISOString() : "",
           files,
+          filesUnknown: unknown,
           isMerge: (entry.parents?.length ?? 0) > 1,
         });
       }
@@ -147,15 +189,41 @@ export class GitWatcher implements vscode.Disposable {
     }
   }
 
-  private async changedFiles(repo: GitRepository, entry: GitCommit): Promise<string[]> {
+  private async changedFiles(repo: GitRepository, entry: GitCommit): Promise<{ files: string[]; unknown: boolean }> {
     const parent = entry.parents?.[0];
-    if (!parent) return [];
+    if (!parent) {
+      // Root commit — nothing to diff against here. Treat as unknown (never
+      // silently "brain-only") so a repo's founding commit isn't uncapturable.
+      return { files: [], unknown: true };
+    }
     try {
       const changes = await repo.diffBetween(parent, entry.hash);
-      return changes.map((c) => vscode.workspace.asRelativePath(c.uri, false));
-    } catch {
-      return [];
+      if (changes.length === 0) {
+        // A genuine zero-file commit is vanishingly rare, and the Git
+        // extension's diff implementation resolves — rather than rejects —
+        // with an empty array on a failed git invocation, so an empty
+        // result here is indistinguishable from a masked failure. Treat it
+        // as unknown rather than risk silently classifying a real commit
+        // as brain-only.
+        return { files: [], unknown: true };
+      }
+      return { files: changes.map((c) => this.toRepoRelative(repo, c.uri)), unknown: false };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.output.appendLine(`brain capture: failed to diff ${entry.hash.slice(0, 7)} in ${repo.rootUri.fsPath} — ${message}`);
+      return { files: [], unknown: true };
     }
+  }
+
+  /**
+   * `vscode.workspace.asRelativePath` is relative to the *workspace
+   * folder*, and returns the input unchanged (i.e. absolute) for a path
+   * outside every open folder. filter.ts needs paths consistently relative
+   * to the *git repo root* regardless of which subdirectory is open as the
+   * workspace, so this computes that directly instead.
+   */
+  private toRepoRelative(repo: GitRepository, uri: vscode.Uri): string {
+    return relative(repo.rootUri.fsPath, uri.fsPath).split(sep).join("/");
   }
 
   dispose(): void {

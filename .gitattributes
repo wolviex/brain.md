@@ -1,0 +1,6 @@
+# extension/src/capture/filter.ts previously carried literal NUL bytes as a
+# regex-replace sentinel, which made git (and GitHub's PR diff view) render
+# it as a binary file — unreviewable, and invisible to grep/ripgrep. Force
+# text handling for the extension's TypeScript so that class of mistake
+# can't silently hide a diff again.
+extension/**/*.ts text

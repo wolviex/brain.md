@@ -30,6 +30,32 @@ an agent following `BRAIN.md` would.
 - **Browse** — a "Brain" activity bar view lists the six root pages and every page grouped by
   category.
 
+## Agent handoff and authentication
+
+Handoff never touches an API key or any other credential. "Hand off to agent" writes a prompt
+file, then runs your **already-installed, already-logged-in** CLI in a terminal — `claude`,
+`codex`, or `opencode`, whichever are found on `PATH`. Whatever session that CLI already holds
+(Claude Code's subscription OAuth in `~/.claude`, Codex's ChatGPT OAuth in `~/.codex/auth.json`,
+or opencode's configured provider) is what the agent uses; the extension never sees it.
+
+Each CLI is launched the way its own docs describe as *interactive, seeded with a prompt* —
+`claude "<prompt>"` and `codex "<prompt>"` both start an interactive session pre-loaded with the
+ingest prompt, so you watch the agent read the commits and apply its writes rather than kicking
+off something unattended. `opencode` has no documented way to seed its TUI with an initial
+message (`opencode run "<prompt>"` is explicitly the *non-interactive* form), so for opencode the
+extension opens the TUI and leaves the prompt file's path on screen for you to paste in.
+
+**On a remote code-server box, each CLI's normal browser-based login can break**, since the
+callback needs to reach the machine running code-server, not yours:
+
+- **Codex** — the OAuth callback binds `localhost:1455` on the server. Run `codex login --device-auth`
+  instead (a workspace admin must have device-code auth enabled first).
+- **Claude Code** — run `claude setup-token`; it prints a URL to open in any browser and stores a
+  long-lived token for headless use.
+- **opencode** — supports multiple model providers; run `opencode auth login` to connect one.
+
+These same messages show up in the editor whenever no agent CLI is found on `PATH`.
+
 ## Install
 
 **Open VSX** (the marketplace code-server uses):
@@ -83,12 +109,43 @@ npm run package    # produce a .vsix
 handlers, watchers, the tree view. Everything else (CLI-arg building, the feedback-loop filter,
 the pending queue, glob math, output parsing) is plain Node and unit tested directly.
 
-`extension/dist/` and the packaged `.vsix` are checked into this repo (for sideloading without a
-build step), so they must stay in sync with `extension/src/`. That sync is CI's job, not a local
-one: `.github/workflows/extension-release.yml` runs on every push to `main` that touches a build
-input (`extension/src`, `package.json`, `esbuild.mjs`, `tsconfig.json`, `.vscodeignore`, `media/`,
-or `../skills`) — typechecks, tests, bumps the patch version, rebuilds `dist/` + the `.vsix`, and
-commits the result straight back to `main` as `github-actions[bot]`. A fresh version on every
-release means the `.vsix` filename never collides with the last one, so sideloading it never needs
-`--force`. Feature branches / PRs are not touched by this workflow — `dist/` and the `.vsix` on a
-branch are just whatever was last committed by hand or by an earlier merge.
+## Known limitations
+
+A code review of the initial merge fixed several data-loss and correctness bugs in commit
+capture and the agent-handoff path (see this directory's git log for the detail). What's left,
+roughly in order of how likely you are to notice it:
+
+- **Multi-root workspaces are still only partially supported.** Commit capture resolves the
+  correct workspace folder for a repo (including a repo opened on a subdirectory, or a folder
+  that itself contains several repos), but the rest of the extension — commands, the tree view,
+  the pending queue — is still scoped to `workspaceFolders[0]`. A symlinked workspace folder can
+  also fail the folder-to-repo match, since the Git extension reports a realpath-resolved root;
+  when that happens, capture logs and skips rather than guessing, so nothing gets misattributed,
+  but nothing gets captured for that repo either.
+- **Agent-handoff failure detection is a heuristic, not a guarantee.** The extension checks that
+  a CLI is on `PATH` before offering it, and checks that its terminal is still open a moment after
+  launch, which catches "not installed" and "crashed immediately." It cannot catch a CLI that
+  starts, prints an auth error, and just sits there — VS Code doesn't expose terminal output
+  without the newer Terminal Shell Integration API, which predates this extension's engine floor
+  (`^1.85.0`). If a handoff silently does nothing, the commits are still in the pending queue.
+- **The 10-minute post-handoff suppression window for hand-edit warnings is fixed, not adaptive.**
+  A real agent session that runs long past that will start seeing "modified outside the brain
+  CLI" warnings again for its own writes.
+- **`workspaceState` updates from concurrent commit batches aren't serialized.** Two repos
+  committing within the same debounce window, or two rapid batches from one repo, both read the
+  queue before either writes it back — the second write can clobber the first's additions.
+- **A `git log` range that's no longer resolvable** (repo re-cloned at the same path, history
+  rewritten, aggressive `gc`) makes capture retry and fail on every change event for that repo
+  until the workspace is reloaded, rather than re-baselining itself automatically.
+- **A few CLI-failure paths still produce misleadingly clean UI**: a failed `brain lint-links`
+  clears the Problems panel and reports "OK, no broken links"; a failed `brain list-pages` in the
+  tree view or manual-landing flow reads as "no pages yet." Both are exit-code-blind today.
+- **`globToRegExp`'s glob support is minimal** — no `?`, and a pattern like `**/*.lock` won't
+  match a top-level `foo.lock` the way a full glob implementation would. Fine for the common
+  `dist/**` / `*.json` cases `brainMd.capture.ignoreGlobs` is meant for; don't rely on more.
+  Agent-ingest prompt files under the extension's storage dir are also never cleaned up.
+
+None of these cause data loss on their own (the fixes that mattered for that — a commit's files
+being misread as empty, the feedback-loop guard having a bypass, batches being dropped on a
+transient CLI failure — are what the code review above addressed); they're rough edges, not
+open safety issues.
