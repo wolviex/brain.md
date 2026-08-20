@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import {
   hasPreCommitHook,
   installPreCommitHook,
   readExistingPreCommitHook,
+  detectProjectMode,
 } from "../src/setupFiles";
 import type { BrainDirInfo } from "../src/brainDir";
 
@@ -96,5 +98,48 @@ test("hasGitRepo / pre-commit hook install lifecycle", async () => {
     const mode = statSync(join(dir, ".git", "hooks", "pre-commit")).mode;
     assert.ok((mode & 0o111) !== 0, "hook should be executable");
     assert.match(readExistingPreCommitHook(dir), /brain\.md pre-commit hook/);
+  });
+});
+
+function initGitRepo(dir: string, commitCount: number): void {
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+  git("init", "-q");
+  git("config", "user.email", "test@example.com");
+  git("config", "user.name", "Test");
+  for (let i = 0; i < commitCount; i++) {
+    writeFileSync(join(dir, `file-${i}.txt`), `${i}`);
+    git("add", ".");
+    git("commit", "-q", "-m", `commit ${i}`);
+  }
+}
+
+test("detectProjectMode: empty, non-git dir is greenfield", async () => {
+  await withTempDir((dir) => {
+    assert.equal(detectProjectMode(dir), "greenfield");
+  });
+});
+
+test("detectProjectMode: brain-setup's own output (BRAIN.md, brain/, CLAUDE.md, .git) doesn't count as brownfield", async () => {
+  await withTempDir((dir) => {
+    initGitRepo(dir, 1);
+    mkdirSync(join(dir, "brain"), { recursive: true });
+    writeFileSync(join(dir, "BRAIN.md"), "x");
+    writeFileSync(join(dir, "CLAUDE.md"), "x");
+    assert.equal(detectProjectMode(dir), "greenfield");
+  });
+});
+
+test("detectProjectMode: real git history (>=3 commits) is brownfield", async () => {
+  await withTempDir((dir) => {
+    initGitRepo(dir, 3);
+    assert.equal(detectProjectMode(dir), "brownfield");
+  });
+});
+
+test("detectProjectMode: existing source files with no/shallow git history is brownfield", async () => {
+  await withTempDir((dir) => {
+    writeFileSync(join(dir, "package.json"), "{}");
+    writeFileSync(join(dir, "index.js"), "");
+    assert.equal(detectProjectMode(dir), "brownfield");
   });
 });
