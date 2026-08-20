@@ -1,0 +1,80 @@
+name: Extension release
+
+# Keeps extension/dist and the packaged .vsix on main in sync with
+# extension/src, automatically — replaces the earlier local pre-commit hook,
+# which only protected commits made by whoever had installed it locally.
+#
+# Runs after a PR lands on main (or any direct push there) that touches a
+# build input. Typechecks + tests, bumps the patch version so the built
+# .vsix always has a fresh, non-colliding filename (no --force reinstall
+# needed), rebuilds dist/ + the .vsix, and commits the result straight back
+# to main. The commit is authored by github-actions[bot] using the default
+# GITHUB_TOKEN, which GitHub does not use to re-trigger push-triggered
+# workflows, so this can't loop.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extension/src/**"
+      - "extension/package.json"
+      - "extension/package-lock.json"
+      - "extension/esbuild.mjs"
+      - "extension/tsconfig.json"
+      - "extension/.vscodeignore"
+      - "extension/media/**"
+      - "skills/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: extension-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: extension
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: extension
+        run: npm test
+
+      - name: Bump patch version
+        id: bump
+        working-directory: extension
+        run: |
+          npm version patch --no-git-tag-version
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Build dist/ and package the .vsix
+        working-directory: extension
+        run: |
+          rm -rf dist
+          rm -f ./*.vsix
+          npm run package
+
+      - name: Commit built artifacts to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add extension/package.json extension/package-lock.json extension/dist extension/*.vsix
+          git commit -m "chore(extension): release v${{ steps.bump.outputs.version }} [skip ci]"
+          git push

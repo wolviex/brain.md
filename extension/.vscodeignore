@@ -2,7 +2,6 @@
 src/**
 test/**
 out/**
-hooks/**
 .gitignore
 tsconfig.json
 esbuild.mjs
