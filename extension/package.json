@@ -2,7 +2,7 @@
   "name": "brain-md",
   "displayName": "brain.md",
   "description": "Persistent project memory for coding agents — scaffold, guard, and capture into a project brain.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "mindmux",
   "license": "Apache-2.0",
   "private": true,
@@ -18,8 +18,12 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "configuration": {
@@ -47,7 +51,9 @@
         },
         "brainMd.capture.ignoreGlobs": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Commits whose changed files ALL match one of these globs (e.g. \"dist/**\", \"*.lock\") are not queued for review."
         }
@@ -106,10 +112,26 @@
     ],
     "menus": {
       "view/title": [
-        { "command": "brainMd.setupWorkspace", "when": "view == brainMd.tree", "group": "navigation@1" },
-        { "command": "brainMd.newPage", "when": "view == brainMd.tree", "group": "navigation@2" },
-        { "command": "brainMd.reindex", "when": "view == brainMd.tree", "group": "navigation@3" },
-        { "command": "brainMd.lintLinks", "when": "view == brainMd.tree", "group": "navigation@4" }
+        {
+          "command": "brainMd.setupWorkspace",
+          "when": "view == brainMd.tree",
+          "group": "navigation@1"
+        },
+        {
+          "command": "brainMd.newPage",
+          "when": "view == brainMd.tree",
+          "group": "navigation@2"
+        },
+        {
+          "command": "brainMd.reindex",
+          "when": "view == brainMd.tree",
+          "group": "navigation@3"
+        },
+        {
+          "command": "brainMd.lintLinks",
+          "when": "view == brainMd.tree",
+          "group": "navigation@4"
+        }
       ]
     }
   },
