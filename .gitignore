@@ -10,9 +10,10 @@
 /CLAUDE.md
 
 # VS Code / code-server extension build artifacts — derived from extension/src
-# and skills/, not checked in.
+# and skills/, not checked in. dist/ and the packaged .vsix ARE checked in
+# (see extension/dist/ and extension/*.vsix) for run-time testing without a
+# build step; assets/ stays derived-only since it's just an intermediate
+# staging copy that vsce zips into the .vsix.
 /extension/node_modules/
 /extension/out/
-/extension/dist/
 /extension/assets/
-/extension/*.vsix
