@@ -82,3 +82,13 @@ npm run package    # produce a .vsix
 `vscode` is only imported where interaction with the editor is actually needed — command
 handlers, watchers, the tree view. Everything else (CLI-arg building, the feedback-loop filter,
 the pending queue, glob math, output parsing) is plain Node and unit tested directly.
+
+`extension/dist/` and the packaged `.vsix` are checked into this repo (for sideloading without a
+build step), so they must stay in sync with `extension/src/`. A pre-commit hook keeps them honest:
+it rebuilds and re-stages `dist/` + the `.vsix` whenever a commit touches `extension/src`,
+`extension/package.json`, `esbuild.mjs`, `tsconfig.json`, `.vscodeignore`, `media/`, or `../skills`
+— a no-op otherwise. Git hooks aren't version-controlled, so enable it once per checkout:
+
+```bash
+npm run hooks:install    # copies hooks/pre-commit-build to ../.git/hooks/pre-commit
+```

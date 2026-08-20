@@ -1,0 +1,44 @@
+#!/bin/sh
+# brain.md extension build hook — rebuilds extension/dist and the .vsix
+# whenever a commit touches what the build actually reads, and folds the
+# fresh output into the same commit so extension/dist and extension/*.vsix
+# never drift from extension/src. A no-op the moment nothing relevant is
+# staged, so it costs nothing on unrelated commits.
+#
+# Not installed automatically — git hooks live outside version control.
+# Enable it once per checkout: `npm run hooks:install` from extension/
+# (see "Development" in extension/README.md).
+set -e
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# Only rebuild if this commit changes a build input: the extension's own
+# source/config, or skills/ (esbuild.mjs copies it into extension/assets
+# and vsce zips that into the .vsix).
+changed=$(git diff --cached --name-only -- \
+  extension/src \
+  extension/package.json \
+  extension/package-lock.json \
+  extension/esbuild.mjs \
+  extension/tsconfig.json \
+  extension/.vscodeignore \
+  extension/media \
+  skills)
+[ -n "$changed" ] || exit 0
+
+cd extension
+
+if [ ! -d node_modules ]; then
+  echo "extension pre-commit: extension/node_modules missing — run 'npm install' in extension/ first." >&2
+  exit 1
+fi
+
+echo "extension pre-commit: extension/src (or an input) changed — rebuilding dist/ + .vsix..." >&2
+npm run typecheck
+rm -rf dist
+rm -f ./*.vsix
+npm run package >&2
+
+cd "$repo_root"
+git add extension/dist extension/*.vsix

@@ -120,7 +120,8 @@
     "typecheck": "tsc --noEmit",
     "pretest": "tsc",
     "test": "node --test out/test/*.test.js",
-    "test:cli": "node --test ../skills/brain-page/test/*.test.mjs"
+    "test:cli": "node --test ../skills/brain-page/test/*.test.mjs",
+    "hooks:install": "cp hooks/pre-commit-build ../.git/hooks/pre-commit && chmod +x ../.git/hooks/pre-commit"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
