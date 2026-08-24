@@ -12,6 +12,7 @@ name: Extension release
 # GITHUB_TOKEN, which GitHub does not use to re-trigger push-triggered
 # workflows, so this can't loop.
 on:
+  workflow_dispatch: 
   push:
     branches: [main]
     paths:
