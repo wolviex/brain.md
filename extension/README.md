@@ -66,15 +66,24 @@ code-server --install-extension mindmux.brain-md
 ```
 
 **Sideload a `.vsix` from the latest release** — CI publishes one automatically on every push to
-`main` that touches the extension (see "Development" below):
+`main` that touches the extension (see "Development" below). With just `curl` (no `gh` needed):
+
+```bash
+url=$(curl -s https://api.github.com/repos/wolviex/brain.md/releases/latest \
+  | grep -o '"browser_download_url": *"[^"]*\.vsix"' | cut -d'"' -f4)
+curl -L -o brain-md.vsix "$url"
+code-server --install-extension brain-md.vsix
+```
+
+Or, with the [`gh` CLI](https://cli.github.com/):
 
 ```bash
 gh release download --repo wolviex/brain.md --pattern '*.vsix' -D .
 code-server --install-extension brain-md-<version>.vsix
 ```
 
-Without `gh`, grab the asset URL from the [Releases page](https://github.com/wolviex/brain.md/releases)
-directly and `curl -LO` it instead.
+Or just grab the asset from the [Releases page](https://github.com/wolviex/brain.md/releases) in a
+browser and upload/copy it over.
 
 **Or build a `.vsix` yourself** from this directory:
 
