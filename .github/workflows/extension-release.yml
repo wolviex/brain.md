@@ -1,18 +1,25 @@
 name: Extension release
 
-# Keeps extension/dist and the packaged .vsix on main in sync with
-# extension/src, automatically — replaces the earlier local pre-commit hook,
-# which only protected commits made by whoever had installed it locally.
+# Publishes a versioned .vsix as a GitHub Release whenever a push to main
+# touches a build input, instead of committing binary build artifacts into
+# the repo tree. Committing dist/ and the .vsix directly turned out to be
+# the wrong call: every release permanently grew git history with a new
+# blob, and even a "delete the old one first" step couldn't reliably stage
+# that deletion (a shell-expanded glob in a git add can never match a file
+# that's already gone from disk — the previous fix for this looked right
+# but silently did nothing). Releases sidestep the whole problem: each
+# version's asset is scoped to its own release, nothing to clean up, and
+# the repo tree never carries a binary.
 #
-# Runs after a PR lands on main (or any direct push there) that touches a
-# build input. Typechecks + tests, bumps the patch version so the built
-# .vsix always has a fresh, non-colliding filename (no --force reinstall
-# needed), rebuilds dist/ + the .vsix, and commits the result straight back
-# to main. The commit is authored by github-actions[bot] using the default
-# GITHUB_TOKEN, which GitHub does not use to re-trigger push-triggered
-# workflows, so this can't loop.
+# Typechecks + tests, bumps the patch version, builds dist/ + the .vsix
+# (both untracked — see .gitignore), commits only the version bump
+# (package.json/package-lock.json) back to main, tags it, and attaches the
+# built .vsix to a new GitHub Release for that tag. The version-bump commit
+# is authored by github-actions[bot] using the default GITHUB_TOKEN, which
+# GitHub does not use to re-trigger push-triggered workflows, so this can't
+# loop.
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
@@ -72,14 +79,22 @@ jobs:
           rm -f ./*.vsix
           npm run package
 
-      - name: Commit built artifacts to main
+      - name: Commit version bump to main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add extension/package.json extension/package-lock.json extension/dist
-          # -A so a deleted old-version .vsix (removed from disk by the
-          # previous step) gets staged as a removal too, not just left
-          # orphaned in git history alongside the new one.
-          git add -A -- extension/*.vsix
+          git add extension/package.json extension/package-lock.json
           git commit -m "chore(extension): release v${{ steps.bump.outputs.version }} [skip ci]"
           git push
+
+      - name: Tag and publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ steps.bump.outputs.version }}"
+          tag="extension-v${version}"
+          git tag "$tag"
+          git push origin "$tag"
+          gh release create "$tag" "extension/brain-md-${version}.vsix" \
+            --title "brain.md extension v${version}" \
+            --notes "Automated build from ${{ github.sha }}."
