@@ -65,7 +65,18 @@ These same messages show up in the editor whenever no agent CLI is found on `PAT
 code-server --install-extension mindmux.brain-md
 ```
 
-**Sideload a `.vsix`** built from this directory:
+**Sideload a `.vsix` from the latest release** — CI publishes one automatically on every push to
+`main` that touches the extension (see "Development" below):
+
+```bash
+gh release download --repo wolviex/brain.md --pattern '*.vsix' -D .
+code-server --install-extension brain-md-<version>.vsix
+```
+
+Without `gh`, grab the asset URL from the [Releases page](https://github.com/wolviex/brain.md/releases)
+directly and `curl -LO` it instead.
+
+**Or build a `.vsix` yourself** from this directory:
 
 ```bash
 npm install
@@ -108,6 +119,16 @@ npm run package    # produce a .vsix
 `vscode` is only imported where interaction with the editor is actually needed — command
 handlers, watchers, the tree view. Everything else (CLI-arg building, the feedback-loop filter,
 the pending queue, glob math, output parsing) is plain Node and unit tested directly.
+
+`extension/dist/` and the packaged `.vsix` are build output — gitignored, never committed.
+`.github/workflows/extension-release.yml` handles releasing them: on every push to `main` that
+touches `extension/src`, `package.json`, `esbuild.mjs`, `tsconfig.json`, `.vscodeignore`, `media/`,
+or `../skills`, it typechecks, tests, bumps the patch version, builds, commits just the version
+bump back to `main`, tags it (`extension-v<version>`), and publishes a GitHub Release with the
+`.vsix` attached. A fresh version on every release means the filename never collides with a
+previous one, so sideloading never needs `--force`. Can also be run on demand via
+`workflow_dispatch` from the Actions tab. Feature branches / PRs are not touched by this
+workflow.
 
 ## Known limitations
 
