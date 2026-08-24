@@ -36,14 +36,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install dependencies
         working-directory: extension
@@ -75,6 +75,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add extension/package.json extension/package-lock.json extension/dist extension/*.vsix
+          git add extension/package.json extension/package-lock.json extension/dist
+          # -A so a deleted old-version .vsix (removed from disk by the
+          # previous step) gets staged as a removal too, not just left
+          # orphaned in git history alongside the new one.
+          git add -A -- extension/*.vsix
           git commit -m "chore(extension): release v${{ steps.bump.outputs.version }} [skip ci]"
           git push
