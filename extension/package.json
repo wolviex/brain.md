@@ -2,7 +2,7 @@
   "name": "brain-md",
   "displayName": "brain.md",
   "description": "Persistent project memory for coding agents — scaffold, guard, and capture into a project brain.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "mindmux",
   "license": "Apache-2.0",
   "private": true,
